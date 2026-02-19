@@ -4,15 +4,56 @@ const ctx = canvas.getContext('2d');
 const WIDTH = canvas.width;
 const HEIGHT = canvas.height;
 const GROUND = 76;
-const PLAYER_SIZE = 14;
+
+const spriteSheet = new Image();
+let spriteReady = false;
+let spriteMissing = false;
+
+function assignSpriteSource(src) {
+  spriteReady = false;
+  spriteMissing = false;
+  spriteSheet.src = src;
+}
+
+spriteSheet.onload = () => {
+  spriteReady = true;
+  spriteMissing = false;
+};
+
+spriteSheet.onerror = () => {
+  spriteReady = false;
+  spriteMissing = true;
+};
+
+assignSpriteSource(CHARACTER_SHEET_DATA_URL);
+
+const CHARACTERS = {
+  violet: {
+    id: 'violet',
+    name: '紫苑魔女（困难）',
+    flap: -5.5,
+    gravity: 0.34,
+    hitbox: 15,
+    frame: { sx: 0, sy: 0, sw: 192, sh: 192 },
+  },
+  gold: {
+    id: 'gold',
+    name: '金辉魔女（简单）',
+    flap: -6.4,
+    gravity: 0.27,
+    hitbox: 12,
+    frame: { sx: 192, sy: 0, sw: 192, sh: 192 },
+  },
+};
 
 const state = {
-  phase: 'ready',
+  phase: 'select',
   score: 0,
   best: Number(localStorage.getItem('arcane-best') || 0),
   t: 0,
   stars: makeStars(72),
   particles: [],
+  selectedCharacter: null,
   player: {
     x: 210,
     y: HEIGHT * 0.48,
@@ -22,6 +63,10 @@ const state = {
   hazards: [],
   spawnTimer: 0,
 };
+
+function getCharacter() {
+  return CHARACTERS[state.selectedCharacter] || CHARACTERS.gold;
+}
 
 function makeStars(amount) {
   return Array.from({ length: amount }, () => ({
@@ -33,8 +78,8 @@ function makeStars(amount) {
   }));
 }
 
-function resetGame() {
-  state.phase = 'ready';
+function resetGame(toSelect = false) {
+  state.phase = toSelect ? 'select' : 'ready';
   state.score = 0;
   state.t = 0;
   state.hazards = [];
@@ -45,21 +90,32 @@ function resetGame() {
   state.player.flapTilt = 0;
 }
 
+function chooseCharacter(id) {
+  state.selectedCharacter = id;
+  resetGame(false);
+}
+
 function startGame() {
+  if (!state.selectedCharacter) {
+    state.phase = 'select';
+    return;
+  }
   if (state.phase === 'running') return;
-  if (state.phase === 'dead') resetGame();
+  if (state.phase === 'dead') resetGame(false);
   state.phase = 'running';
   flap();
 }
 
 function flap() {
+  if (state.phase === 'select') return;
   if (state.phase === 'ready') {
     startGame();
     return;
   }
   if (state.phase !== 'running') return;
 
-  state.player.vy = -5.9;
+  const character = getCharacter();
+  state.player.vy = character.flap;
   state.player.flapTilt = -0.45;
   emitParticles(state.player.x - 10, state.player.y + 1, 8, '#8ff8ff');
 }
@@ -89,14 +145,14 @@ function crash() {
 }
 
 function addHazard(kind, xOffset, extra = {}) {
-  const base = {
+  state.hazards.push({
     kind,
     x: WIDTH + xOffset,
     width: 56,
     passed: false,
     phase: Math.random() * Math.PI * 2,
-  };
-  state.hazards.push({ ...base, ...extra });
+    ...extra,
+  });
 }
 
 function spawnWave() {
@@ -118,12 +174,7 @@ function spawnWave() {
       addHazard('pulse-wall', 60, { yBase: 170 + Math.random() * 140, width: 110, thickness: 14, onThreshold: 0.4 });
       addHazard('top-spire', 280, { height: 140 + Math.random() * 80 });
     },
-    () => {
-      addHazard('bottom-spire', 40, { height: 130 + Math.random() * 70 });
-      addHazard('pulse-wall', 240, { yBase: 170 + Math.random() * 140, width: 108, thickness: 12, onThreshold: 0.25 });
-    },
   ];
-
   patterns[Math.floor(Math.random() * patterns.length)]();
 }
 
@@ -132,17 +183,8 @@ function collidesRect(a, b) {
 }
 
 function getHazardRect(h) {
-  if (h.kind === 'top-spire') {
-    return { left: h.x, right: h.x + h.width, top: 0, bottom: h.height };
-  }
-  if (h.kind === 'bottom-spire') {
-    return {
-      left: h.x,
-      right: h.x + h.width,
-      top: HEIGHT - GROUND - h.height,
-      bottom: HEIGHT - GROUND,
-    };
-  }
+  if (h.kind === 'top-spire') return { left: h.x, right: h.x + h.width, top: 0, bottom: h.height };
+  if (h.kind === 'bottom-spire') return { left: h.x, right: h.x + h.width, top: HEIGHT - GROUND - h.height, bottom: HEIGHT - GROUND };
   if (h.kind === 'floating-rune') {
     const y = h.yBase + Math.sin(state.t * 0.08 + h.phase) * h.amp;
     return { left: h.x, right: h.x + h.width, top: y, bottom: y + h.height };
@@ -150,12 +192,7 @@ function getHazardRect(h) {
   if (h.kind === 'pulse-wall') {
     const on = Math.sin(state.t * 0.11 + h.phase) > h.onThreshold;
     if (!on) return null;
-    return {
-      left: h.x,
-      right: h.x + h.width,
-      top: h.yBase - h.thickness * 0.5,
-      bottom: h.yBase + h.thickness * 0.5,
-    };
+    return { left: h.x, right: h.x + h.width, top: h.yBase - h.thickness * 0.5, bottom: h.yBase + h.thickness * 0.5 };
   }
   return null;
 }
@@ -183,7 +220,8 @@ function update() {
 
   if (state.phase !== 'running') return;
 
-  state.player.vy += 0.31;
+  const character = getCharacter();
+  state.player.vy += character.gravity;
   state.player.y += state.player.vy;
   state.player.flapTilt = Math.min(state.player.flapTilt + 0.05, 0.64);
 
@@ -193,12 +231,8 @@ function update() {
     spawnWave();
   }
 
-  const pRect = {
-    left: state.player.x - PLAYER_SIZE,
-    right: state.player.x + PLAYER_SIZE,
-    top: state.player.y - PLAYER_SIZE,
-    bottom: state.player.y + PLAYER_SIZE,
-  };
+  const r = character.hitbox;
+  const pRect = { left: state.player.x - r, right: state.player.x + r, top: state.player.y - r, bottom: state.player.y + r };
 
   for (let i = state.hazards.length - 1; i >= 0; i -= 1) {
     const h = state.hazards[i];
@@ -216,48 +250,17 @@ function update() {
     }
 
     const rect = getHazardRect(h);
-    if (rect && collidesRect(pRect, rect)) {
-      crash();
-    }
+    if (rect && collidesRect(pRect, rect)) crash();
   }
 
-  if (state.player.y + PLAYER_SIZE > HEIGHT - GROUND || state.player.y - PLAYER_SIZE < 0) crash();
-}
-
-function drawPixelSprite(sprite, x, y, scale, palette) {
-  for (let row = 0; row < sprite.length; row += 1) {
-    for (let col = 0; col < sprite[row].length; col += 1) {
-      const c = sprite[row][col];
-      if (!c) continue;
-      ctx.fillStyle = palette[c];
-      ctx.fillRect(x + col * scale, y + row * scale, scale, scale);
-    }
-  }
+  if (state.player.y + r > HEIGHT - GROUND || state.player.y - r < 0) crash();
 }
 
 function drawMoon(x, y) {
-  const moonSprite = [
-    [0, 0, 1, 1, 1, 0, 0],
-    [0, 1, 1, 1, 1, 1, 0],
-    [1, 1, 1, 1, 1, 1, 1],
-    [1, 1, 1, 1, 1, 1, 1],
-    [1, 1, 1, 1, 1, 1, 1],
-    [0, 1, 1, 1, 1, 1, 0],
-    [0, 0, 1, 1, 1, 0, 0],
-  ];
-  drawPixelSprite(moonSprite, x, y, 7, { 1: '#c7b8ff' });
-  drawPixelSprite(
-    [
-      [0, 2, 2, 0],
-      [2, 2, 2, 0],
-      [2, 2, 2, 2],
-      [0, 2, 2, 2],
-    ],
-    x + 20,
-    y + 15,
-    7,
-    { 2: '#171430' },
-  );
+  ctx.fillStyle = '#c7b8ff';
+  ctx.fillRect(x, y, 49, 49);
+  ctx.fillStyle = '#171430';
+  ctx.fillRect(x + 21, y + 14, 28, 28);
 }
 
 function drawBackground() {
@@ -282,38 +285,29 @@ function drawHazard(h) {
     ctx.fillStyle = '#345f86';
     ctx.fillRect(h.x, 0, h.width, h.height);
     ctx.fillStyle = '#8bd1ff';
-    for (let y = 0; y < h.height; y += 14) {
-      ctx.fillRect(h.x + 6, y, h.width - 12, 6);
-    }
+    for (let y = 0; y < h.height; y += 14) ctx.fillRect(h.x + 6, y, h.width - 12, 6);
     ctx.fillStyle = '#d8f4ff';
     ctx.fillRect(h.x - 4, h.height - 8, h.width + 8, 8);
     return;
   }
-
   if (h.kind === 'bottom-spire') {
     const y0 = HEIGHT - GROUND - h.height;
     ctx.fillStyle = '#3d577e';
     ctx.fillRect(h.x, y0, h.width, h.height);
     ctx.fillStyle = '#aec9ff';
-    for (let y = y0; y < HEIGHT - GROUND; y += 14) {
-      ctx.fillRect(h.x + 5, y + 4, h.width - 10, 6);
-    }
+    for (let y = y0; y < HEIGHT - GROUND; y += 14) ctx.fillRect(h.x + 5, y + 4, h.width - 10, 6);
     ctx.fillStyle = '#eef5ff';
     ctx.fillRect(h.x - 4, y0, h.width + 8, 8);
     return;
   }
-
   if (h.kind === 'floating-rune') {
     const y = h.yBase + Math.sin(state.t * 0.08 + h.phase) * h.amp;
     ctx.fillStyle = '#6d42ff';
     ctx.fillRect(h.x, y, h.width, h.height);
     ctx.fillStyle = '#f2beff';
     ctx.fillRect(h.x + 7, y + 7, h.width - 14, h.height - 14);
-    ctx.fillStyle = '#25193c';
-    ctx.fillRect(h.x + 14, y + 14, h.width - 28, h.height - 28);
     return;
   }
-
   if (h.kind === 'pulse-wall') {
     const active = Math.sin(state.t * 0.11 + h.phase) > h.onThreshold;
     if (active) {
@@ -328,31 +322,63 @@ function drawHazard(h) {
   }
 }
 
-const dragonSprite = [
-  [0, 0, 0, 2, 2, 2, 0, 0],
-  [0, 0, 2, 1, 1, 1, 2, 0],
-  [0, 2, 1, 3, 1, 1, 1, 2],
-  [2, 1, 1, 3, 3, 1, 1, 2],
-  [2, 1, 1, 1, 1, 1, 1, 2],
-  [0, 2, 1, 1, 1, 1, 2, 0],
-  [0, 0, 2, 1, 1, 2, 0, 0],
-  [0, 2, 0, 2, 2, 0, 2, 0],
-];
+function drawCharacterFromSheet(character, x, y, targetW, targetH) {
+  const { sx, sy, sw, sh } = character.frame;
+  if (spriteReady) {
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(spriteSheet, sx, sy, sw, sh, x, y, targetW, targetH);
+    return;
+  }
 
-const dragonPalette = {
-  1: '#9d7dff',
-  2: '#5a3ec2',
-  3: '#a9f4ff',
-};
+  ctx.fillStyle = '#2a2038';
+  ctx.fillRect(x, y, targetW, targetH);
+  ctx.strokeStyle = '#8a76b8';
+  ctx.strokeRect(x + 1.5, y + 1.5, targetW - 3, targetH - 3);
+  ctx.fillStyle = '#f6e7ff';
+  ctx.font = '12px monospace';
+  ctx.fillText(spriteMissing ? '角色图未就绪' : '正在读取角色图', x + 8, y + targetH / 2);
+}
+
+function drawCharacterPreview(character, x, y, selected, keyLabel, helpText) {
+  ctx.fillStyle = selected ? '#2e274e' : '#18142c';
+  ctx.fillRect(x, y, 250, 170);
+  ctx.strokeStyle = selected ? '#ffd86f' : '#7a6bbd';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(x + 1.5, y + 1.5, 247, 167);
+
+  drawCharacterFromSheet(character, x + 10, y + 18, 100, 120);
+
+  ctx.fillStyle = '#f7f2ff';
+  ctx.font = 'bold 16px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(character.name, x + 118, y + 52);
+  ctx.font = '14px monospace';
+  ctx.fillText(helpText, x + 118, y + 80);
+  ctx.fillText(`按 ${keyLabel} 选择`, x + 118, y + 108);
+}
+
+function drawSelectScreen() {
+  ctx.fillStyle = '#0b0914cc';
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  ctx.fillStyle = '#f8f3ff';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 30px monospace';
+  ctx.fillText('选择角色', WIDTH / 2, 92);
+  ctx.font = '16px monospace';
+  ctx.fillText('角色图已内嵌到代码文本中（无二进制依赖）。', WIDTH / 2, 122);
+
+  drawCharacterPreview(CHARACTERS.violet, 120, 160, state.selectedCharacter === 'violet', '1', '重力更高 / 操作更硬核');
+  drawCharacterPreview(CHARACTERS.gold, 590, 160, state.selectedCharacter === 'gold', '2', '重力更低 / 起跳更轻松');
+}
 
 function drawPlayer() {
+  const character = getCharacter();
   ctx.save();
   ctx.translate(state.player.x, state.player.y);
   ctx.rotate(state.player.flapTilt);
   const bob = Math.sin(state.t * 0.24) * (state.phase === 'running' ? 1 : 2.2);
-  drawPixelSprite(dragonSprite, -16, -16 + bob, 4, dragonPalette);
-  ctx.fillStyle = '#fefefe';
-  ctx.fillRect(4, -3 + bob, 3, 3);
+  drawCharacterFromSheet(character, -24, -24 + bob, 48, 48);
   ctx.restore();
 }
 
@@ -361,9 +387,7 @@ function drawGround() {
   ctx.fillStyle = '#2a2448';
   ctx.fillRect(0, y, WIDTH, GROUND);
   ctx.fillStyle = '#453d70';
-  for (let x = 0; x < WIDTH; x += 16) {
-    ctx.fillRect(x, y + ((x / 16) % 2) * 4, 12, 7);
-  }
+  for (let x = 0; x < WIDTH; x += 16) ctx.fillRect(x, y + ((x / 16) % 2) * 4, 12, 7);
   ctx.fillStyle = '#65ffb4';
   for (let x = 2; x < WIDTH; x += 20) {
     const wave = Math.sin((state.t + x) * 0.07) * 2;
@@ -379,7 +403,7 @@ function drawParticles() {
 }
 
 function drawBanner(text) {
-  const w = 450;
+  const w = 520;
   const h = 52;
   const x = (WIDTH - w) / 2;
   const y = HEIGHT * 0.13;
@@ -401,9 +425,10 @@ function drawUi() {
   ctx.fillText(`分数 ${state.score}`, 18, 38);
   ctx.font = '16px monospace';
   ctx.fillText(`最高 ${state.best}`, 18, 60);
+  if (state.selectedCharacter) ctx.fillText(`角色 ${getCharacter().name}`, 18, 82);
 
-  if (state.phase === 'ready') drawBanner('横向展开波次：单侧障碍为主，更可读');
-  if (state.phase === 'dead') drawBanner('命中障碍！按空格再战一局');
+  if (state.phase === 'ready') drawBanner('准备完毕：空格/点击起飞，按 Q 可重选角色');
+  if (state.phase === 'dead') drawBanner('命中障碍！空格重开，按 Q 返回选角');
 }
 
 function render() {
@@ -411,8 +436,12 @@ function render() {
   for (const h of state.hazards) drawHazard(h);
   drawGround();
   drawParticles();
-  drawPlayer();
-  drawUi();
+
+  if (state.phase === 'select') drawSelectScreen();
+  else {
+    drawPlayer();
+    drawUi();
+  }
 }
 
 function frame() {
@@ -421,26 +450,36 @@ function frame() {
   requestAnimationFrame(frame);
 }
 
+
 window.addEventListener('keydown', (event) => {
+  if (event.code === 'Digit1') return chooseCharacter('violet');
+  if (event.code === 'Digit2') return chooseCharacter('gold');
+  if (event.code === 'KeyQ') return resetGame(true);
   if (['Space', 'ArrowUp', 'KeyW'].includes(event.code)) {
     event.preventDefault();
     if (state.phase === 'dead') {
-      resetGame();
+      resetGame(false);
       startGame();
-    } else {
-      flap();
-    }
+    } else flap();
   }
 });
 
-canvas.addEventListener('pointerdown', () => {
+canvas.addEventListener('pointerdown', (event) => {
+  if (state.phase === 'select') {
+    const rect = canvas.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * WIDTH;
+    const y = ((event.clientY - rect.top) / rect.height) * HEIGHT;
+
+    if (x >= 120 && x <= 370 && y >= 160 && y <= 330) return chooseCharacter('violet');
+    if (x >= 590 && x <= 840 && y >= 160 && y <= 330) return chooseCharacter('gold');
+    return;
+  }
+
   if (state.phase === 'dead') {
-    resetGame();
+    resetGame(false);
     startGame();
-  } else {
-    flap();
-  }
+  } else flap();
 });
 
-resetGame();
+resetGame(true);
 frame();
