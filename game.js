@@ -64,6 +64,53 @@ const state = {
   spawnTimer: 0,
 };
 
+
+const frameRectCache = new Map();
+
+function getFrameDrawRect(character) {
+  if (!spriteReady) {
+    return { sx: character.frame.sx, sy: character.frame.sy, sw: character.frame.sw, sh: character.frame.sh };
+  }
+  if (frameRectCache.has(character.id)) {
+    return frameRectCache.get(character.id);
+  }
+
+  const { sx, sy, sw, sh } = character.frame;
+
+  const temp = document.createElement('canvas');
+  temp.width = sw;
+  temp.height = sh;
+  const tctx = temp.getContext('2d');
+  tctx.drawImage(spriteSheet, sx, sy, sw, sh, 0, 0, sw, sh);
+  const data = tctx.getImageData(0, 0, sw, sh).data;
+
+  const rowIsBlank = (row) => {
+    let blank = 0;
+    for (let x = 0; x < sw; x += 1) {
+      const i = (row * sw + x) * 4;
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const a = data[i + 3];
+      const transparent = a < 10;
+      const whiteStrip = a > 10 && r > 236 && g > 236 && b > 236;
+      if (transparent || whiteStrip) blank += 1;
+    }
+    return blank / sw > 0.92;
+  };
+
+  let top = 0;
+  while (top < sh - 1 && rowIsBlank(top)) top += 1;
+
+  let bottom = sh - 1;
+  while (bottom > top && rowIsBlank(bottom)) bottom -= 1;
+
+  const rect = { sx, sy: sy + top, sw, sh: Math.max(8, bottom - top + 1) };
+  frameRectCache.set(character.id, rect);
+  return rect;
+}
+
+
 function getCharacter() {
   return CHARACTERS[state.selectedCharacter] || CHARACTERS.gold;
 }
@@ -223,7 +270,7 @@ function update() {
   const character = getCharacter();
   state.player.vy += character.gravity;
   state.player.y += state.player.vy;
-  state.player.flapTilt = Math.min(state.player.flapTilt + 0.05, 0.64);
+  state.player.flapTilt = Math.max(-0.75, Math.min(0.9, state.player.vy * 0.12));
 
   state.spawnTimer += 1;
   if (state.spawnTimer >= 170) {
@@ -256,11 +303,40 @@ function update() {
   if (state.player.y + r > HEIGHT - GROUND || state.player.y - r < 0) crash();
 }
 
+function drawPixelSprite(sprite, x, y, scale, palette) {
+  for (let row = 0; row < sprite.length; row += 1) {
+    for (let col = 0; col < sprite[row].length; col += 1) {
+      const c = sprite[row][col];
+      if (!c) continue;
+      ctx.fillStyle = palette[c];
+      ctx.fillRect(x + col * scale, y + row * scale, scale, scale);
+    }
+  }
+}
+
 function drawMoon(x, y) {
-  ctx.fillStyle = '#c7b8ff';
-  ctx.fillRect(x, y, 49, 49);
-  ctx.fillStyle = '#171430';
-  ctx.fillRect(x + 21, y + 14, 28, 28);
+  const moonSprite = [
+    [0, 0, 1, 1, 1, 0, 0],
+    [0, 1, 1, 1, 1, 1, 0],
+    [1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1],
+    [0, 1, 1, 1, 1, 1, 0],
+    [0, 0, 1, 1, 1, 0, 0],
+  ];
+  drawPixelSprite(moonSprite, x, y, 7, { 1: '#c7b8ff' });
+  drawPixelSprite(
+    [
+      [0, 2, 2, 0],
+      [2, 2, 2, 0],
+      [2, 2, 2, 2],
+      [0, 2, 2, 2],
+    ],
+    x + 20,
+    y + 15,
+    7,
+    { 2: '#171430' },
+  );
 }
 
 function drawBackground() {
@@ -323,10 +399,10 @@ function drawHazard(h) {
 }
 
 function drawCharacterFromSheet(character, x, y, targetW, targetH) {
-  const { sx, sy, sw, sh } = character.frame;
   if (spriteReady) {
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(spriteSheet, sx, sy, sw, sh, x, y, targetW, targetH);
+    const rect = getFrameDrawRect(character);
+    ctx.drawImage(spriteSheet, rect.sx, rect.sy, rect.sw, rect.sh, x, y, targetW, targetH);
     return;
   }
 
