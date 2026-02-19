@@ -3,45 +3,51 @@ const ctx = canvas.getContext('2d');
 
 const WIDTH = canvas.width;
 const HEIGHT = canvas.height;
-const GROUND = 86;
-const PLAYER_SIZE = 10;
+const GROUND = 76;
+const PLAYER_SIZE = 14;
 
 const state = {
   phase: 'ready',
   score: 0,
   best: Number(localStorage.getItem('arcane-best') || 0),
   t: 0,
-  stars: makeStars(48),
+  stars: makeStars(72),
   particles: [],
   player: {
-    x: 132,
-    y: HEIGHT * 0.45,
+    x: 210,
+    y: HEIGHT * 0.48,
     vy: 0,
     flapTilt: 0,
   },
-  gates: [],
-  gateTimer: 0,
+  obstacles: [],
+  obstacleTimer: 0,
 };
+
+function makeStars(amount) {
+  return Array.from({ length: amount }, () => ({
+    x: Math.random() * WIDTH,
+    y: Math.random() * (HEIGHT - GROUND - 20),
+    twinkle: Math.random() * Math.PI * 2,
+    speed: 0.2 + Math.random() * 0.5,
+    size: Math.random() > 0.82 ? 2 : 1,
+  }));
+}
 
 function resetGame() {
   state.phase = 'ready';
   state.score = 0;
   state.t = 0;
-  state.gates.length = 0;
-  state.particles.length = 0;
-  state.gateTimer = 0;
-  state.player.y = HEIGHT * 0.45;
+  state.obstacles = [];
+  state.particles = [];
+  state.obstacleTimer = 0;
+  state.player.y = HEIGHT * 0.48;
   state.player.vy = 0;
   state.player.flapTilt = 0;
 }
 
 function startGame() {
-  if (state.phase === 'running') {
-    return;
-  }
-  if (state.phase === 'dead') {
-    resetGame();
-  }
+  if (state.phase === 'running') return;
+  if (state.phase === 'dead') resetGame();
   state.phase = 'running';
   flap();
 }
@@ -51,38 +57,11 @@ function flap() {
     startGame();
     return;
   }
-  if (state.phase !== 'running') {
-    return;
-  }
-  state.player.vy = -5.6;
+  if (state.phase !== 'running') return;
+
+  state.player.vy = -5.9;
   state.player.flapTilt = -0.45;
-  emitParticles(state.player.x - 8, state.player.y + 2, 8, '#8ff8ff');
-}
-
-function makeStars(amount) {
-  return Array.from({ length: amount }, () => ({
-    x: Math.random() * WIDTH,
-    y: Math.random() * (HEIGHT - GROUND - 30),
-    twinkle: Math.random() * Math.PI * 2,
-    speed: 0.15 + Math.random() * 0.45,
-    size: Math.random() > 0.8 ? 2 : 1,
-  }));
-}
-
-function spawnGate() {
-  const gap = 176;
-  const topMin = 80;
-  const topMax = HEIGHT - GROUND - gap - 110;
-  const topHeight = topMin + Math.random() * (topMax - topMin);
-
-  state.gates.push({
-    x: WIDTH + 24,
-    width: 60,
-    topHeight,
-    bottomY: topHeight + gap,
-    passed: false,
-    seed: Math.random() * 999,
-  });
+  emitParticles(state.player.x - 10, state.player.y + 1, 8, '#8ff8ff');
 }
 
 function emitParticles(x, y, count, color) {
@@ -90,9 +69,9 @@ function emitParticles(x, y, count, color) {
     state.particles.push({
       x,
       y,
-      vx: (Math.random() - 0.5) * 1.6,
-      vy: (Math.random() - 0.5) * 1.6,
-      life: 18 + Math.random() * 16,
+      vx: (Math.random() - 0.5) * 1.8,
+      vy: (Math.random() - 0.5) * 1.8,
+      life: 16 + Math.random() * 18,
       color,
       size: Math.random() > 0.45 ? 2 : 1,
     });
@@ -100,15 +79,37 @@ function emitParticles(x, y, count, color) {
 }
 
 function crash() {
-  if (state.phase !== 'running') {
-    return;
-  }
+  if (state.phase !== 'running') return;
   state.phase = 'dead';
-  emitParticles(state.player.x, state.player.y, 36, '#ff74d5');
+  emitParticles(state.player.x, state.player.y, 48, '#ff88d8');
   if (state.score > state.best) {
     state.best = state.score;
     localStorage.setItem('arcane-best', String(state.best));
   }
+}
+
+function spawnObstacle() {
+  const variants = ['crystal-gate', 'tooth-gate', 'rune-wheel'];
+  const variant = variants[Math.floor(Math.random() * variants.length)];
+  const gap = variant === 'rune-wheel' ? 166 : 182;
+  const topMin = 42;
+  const topMax = HEIGHT - GROUND - gap - 42;
+  const topHeight = topMin + Math.random() * (topMax - topMin);
+
+  state.obstacles.push({
+    variant,
+    x: WIDTH + 40,
+    width: 82,
+    topHeight,
+    bottomY: topHeight + gap,
+    passed: false,
+    seed: Math.random() * 1000,
+    bobPhase: Math.random() * Math.PI * 2,
+  });
+}
+
+function collidesRect(a, b) {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
 
 function update() {
@@ -116,10 +117,10 @@ function update() {
 
   for (const star of state.stars) {
     star.x -= star.speed;
-    star.twinkle += 0.04;
-    if (star.x < -4) {
-      star.x = WIDTH + Math.random() * 20;
-      star.y = Math.random() * (HEIGHT - GROUND - 30);
+    star.twinkle += 0.035;
+    if (star.x < -3) {
+      star.x = WIDTH + Math.random() * 18;
+      star.y = Math.random() * (HEIGHT - GROUND - 20);
     }
   }
 
@@ -129,69 +130,85 @@ function update() {
     p.y += p.vy;
     p.vy += 0.03;
     p.life -= 1;
-    if (p.life <= 0) {
-      state.particles.splice(i, 1);
-    }
+    if (p.life <= 0) state.particles.splice(i, 1);
   }
 
-  if (state.phase !== 'running') {
-    return;
-  }
+  if (state.phase !== 'running') return;
 
-  state.player.vy += 0.32;
+  state.player.vy += 0.31;
   state.player.y += state.player.vy;
-  state.player.flapTilt += 0.05;
-  state.player.flapTilt = Math.min(state.player.flapTilt, 0.65);
+  state.player.flapTilt = Math.min(state.player.flapTilt + 0.05, 0.64);
 
-  state.gateTimer += 1;
-  if (state.gateTimer >= 92) {
-    state.gateTimer = 0;
-    spawnGate();
+  state.obstacleTimer += 1;
+  if (state.obstacleTimer >= 94) {
+    state.obstacleTimer = 0;
+    spawnObstacle();
   }
 
-  const playerRect = {
+  const pRect = {
     left: state.player.x - PLAYER_SIZE,
     right: state.player.x + PLAYER_SIZE,
     top: state.player.y - PLAYER_SIZE,
     bottom: state.player.y + PLAYER_SIZE,
   };
 
-  for (let i = state.gates.length - 1; i >= 0; i -= 1) {
-    const gate = state.gates[i];
-    gate.x -= 2.15;
+  for (let i = state.obstacles.length - 1; i >= 0; i -= 1) {
+    const o = state.obstacles[i];
+    o.x -= 3;
 
-    if (!gate.passed && gate.x + gate.width < state.player.x) {
-      gate.passed = true;
+    if (!o.passed && o.x + o.width < state.player.x) {
+      o.passed = true;
       state.score += 1;
-      emitParticles(state.player.x + 8, state.player.y, 10, '#ffe082');
+      emitParticles(state.player.x + 6, state.player.y - 2, 11, '#ffe58a');
     }
 
-    if (gate.x + gate.width < -20) {
-      state.gates.splice(i, 1);
+    if (o.x + o.width < -30) {
+      state.obstacles.splice(i, 1);
       continue;
     }
 
-    const inX = playerRect.right > gate.x && playerRect.left < gate.x + gate.width;
-    if (inX) {
-      if (playerRect.top < gate.topHeight || playerRect.bottom > gate.bottomY) {
-        crash();
-      }
+    const inX = pRect.right > o.x && pRect.left < o.x + o.width;
+    if (inX && (pRect.top < o.topHeight || pRect.bottom > o.bottomY)) {
+      crash();
+    }
+
+    if (o.variant === 'tooth-gate' && inX) {
+      const toothTop = {
+        left: o.x + 20,
+        right: o.x + o.width - 20,
+        top: o.topHeight - 20,
+        bottom: o.topHeight,
+      };
+      const toothBottom = {
+        left: o.x + 20,
+        right: o.x + o.width - 20,
+        top: o.bottomY,
+        bottom: o.bottomY + 20,
+      };
+      if (collidesRect(pRect, toothTop) || collidesRect(pRect, toothBottom)) crash();
+    }
+
+    if (o.variant === 'rune-wheel') {
+      const wheelY = (o.topHeight + o.bottomY) / 2 + Math.sin(state.t * 0.08 + o.bobPhase) * 42;
+      const wheel = {
+        left: o.x + 30,
+        right: o.x + 56,
+        top: wheelY - 13,
+        bottom: wheelY + 13,
+      };
+      if (collidesRect(pRect, wheel)) crash();
     }
   }
 
-  if (state.player.y + PLAYER_SIZE > HEIGHT - GROUND || state.player.y - PLAYER_SIZE < 0) {
-    crash();
-  }
+  if (state.player.y + PLAYER_SIZE > HEIGHT - GROUND || state.player.y - PLAYER_SIZE < 0) crash();
 }
 
 function drawPixelSprite(sprite, x, y, scale, palette) {
   for (let row = 0; row < sprite.length; row += 1) {
     for (let col = 0; col < sprite[row].length; col += 1) {
-      const colorId = sprite[row][col];
-      if (!colorId) {
-        continue;
-      }
-      ctx.fillStyle = palette[colorId];
+      const c = sprite[row][col];
+      if (!c) continue;
+      ctx.fillStyle = palette[c];
       ctx.fillRect(x + col * scale, y + row * scale, scale, scale);
     }
   }
@@ -199,61 +216,96 @@ function drawPixelSprite(sprite, x, y, scale, palette) {
 
 function drawBackground() {
   const grad = ctx.createLinearGradient(0, 0, 0, HEIGHT);
-  grad.addColorStop(0, '#18152f');
-  grad.addColorStop(0.5, '#231f43');
-  grad.addColorStop(1, '#211b33');
+  grad.addColorStop(0, '#171430');
+  grad.addColorStop(0.5, '#221e43');
+  grad.addColorStop(1, '#1d1a32');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
   for (const star of state.stars) {
-    const pulse = 0.55 + Math.sin(star.twinkle) * 0.35;
+    const pulse = 0.56 + Math.sin(star.twinkle) * 0.32;
     ctx.fillStyle = `rgba(186, 225, 255, ${pulse})`;
     ctx.fillRect(Math.round(star.x), Math.round(star.y), star.size, star.size);
   }
 
-  const moonX = WIDTH - 80;
-  const moonY = 86 + Math.sin(state.t * 0.01) * 2;
-  ctx.fillStyle = '#c7b8ff';
-  ctx.fillRect(moonX, moonY, 40, 40);
-  ctx.fillStyle = '#18152f';
-  ctx.fillRect(moonX + 8, moonY + 8, 30, 30);
+  drawMoon(WIDTH - 110, 78);
 }
 
-function drawGate(gate) {
-  const crystal = '#68f6ff';
-  const shadow = '#2b6072';
-  const rune = '#d5ff63';
-
-  drawArcaneColumn(gate.x, 0, gate.width, gate.topHeight, gate.seed, crystal, shadow, rune, true);
-  drawArcaneColumn(gate.x, gate.bottomY, gate.width, HEIGHT - GROUND - gate.bottomY, gate.seed + 1.3, crystal, shadow, rune, false);
-
-  ctx.fillStyle = '#cbffff';
-  ctx.fillRect(gate.x - 4, gate.topHeight - 6, gate.width + 8, 6);
-  ctx.fillRect(gate.x - 4, gate.bottomY, gate.width + 8, 6);
+function drawMoon(x, y) {
+  const moonSprite = [
+    [0, 0, 1, 1, 1, 0, 0],
+    [0, 1, 1, 1, 1, 1, 0],
+    [1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1],
+    [0, 1, 1, 1, 1, 1, 0],
+    [0, 0, 1, 1, 1, 0, 0],
+  ];
+  drawPixelSprite(moonSprite, x, y, 7, { 1: '#c7b8ff' });
+  drawPixelSprite(
+    [
+      [0, 2, 2, 0],
+      [2, 2, 2, 0],
+      [2, 2, 2, 2],
+      [0, 2, 2, 2],
+    ],
+    x + 20,
+    y + 15,
+    7,
+    { 2: '#171430' },
+  );
 }
 
-function drawArcaneColumn(x, y, w, h, seed, crystal, shadow, rune, isTop) {
+function drawArcaneColumn(x, y, w, h, seed, variant) {
+  const shadow = variant === 'tooth-gate' ? '#4f5b78' : '#2b6072';
+  const body = variant === 'tooth-gate' ? '#8da2cb' : '#69f7ff';
+  const rune = variant === 'rune-wheel' ? '#ffa4fe' : '#dbff6d';
+
   ctx.fillStyle = shadow;
   ctx.fillRect(x, y, w, h);
-
-  ctx.fillStyle = crystal;
-  for (let i = 0; i < h; i += 12) {
-    const offset = Math.sin(seed + i * 0.1) > 0 ? 4 : 2;
-    ctx.fillRect(x + offset, y + i, w - 8, 6);
+  ctx.fillStyle = body;
+  for (let i = 0; i < h; i += 13) {
+    const offset = Math.sin(seed + i * 0.1) > 0 ? 5 : 2;
+    ctx.fillRect(x + offset, y + i, w - 10, 6);
   }
 
   ctx.fillStyle = rune;
-  for (let i = 12; i < h - 12; i += 30) {
-    const rx = x + 10 + ((Math.sin(seed * 8 + i) + 1) * 0.5) * (w - 20);
+  for (let i = 12; i < h - 12; i += 26) {
+    const rx = x + 8 + ((Math.sin(seed * 9 + i) + 1) * 0.5) * (w - 16);
     ctx.fillRect(Math.round(rx), y + i, 4, 4);
   }
+}
 
-  if (isTop) {
-    ctx.fillStyle = '#e8ffff';
-    ctx.fillRect(x + 2, y + h - 10, w - 4, 4);
-  } else {
-    ctx.fillStyle = '#e8ffff';
-    ctx.fillRect(x + 2, y + 6, w - 4, 4);
+function drawObstacle(o) {
+  drawArcaneColumn(o.x, 0, o.width, o.topHeight, o.seed, o.variant);
+  drawArcaneColumn(o.x, o.bottomY, o.width, HEIGHT - GROUND - o.bottomY, o.seed + 2.1, o.variant);
+
+  if (o.variant === 'crystal-gate') {
+    ctx.fillStyle = '#d5ffff';
+    ctx.fillRect(o.x - 6, o.topHeight - 8, o.width + 12, 8);
+    ctx.fillRect(o.x - 6, o.bottomY, o.width + 12, 8);
+  }
+
+  if (o.variant === 'tooth-gate') {
+    ctx.fillStyle = '#e9f4ff';
+    for (let x = o.x + 20; x < o.x + o.width - 20; x += 10) {
+      ctx.fillRect(x, o.topHeight - 20, 6, 20);
+      ctx.fillRect(x, o.bottomY, 6, 20);
+    }
+  }
+
+  if (o.variant === 'rune-wheel') {
+    ctx.fillStyle = '#bddeff';
+    ctx.fillRect(o.x - 5, o.topHeight - 8, o.width + 10, 8);
+    ctx.fillRect(o.x - 5, o.bottomY, o.width + 10, 8);
+
+    const wy = (o.topHeight + o.bottomY) / 2 + Math.sin(state.t * 0.08 + o.bobPhase) * 42;
+    ctx.fillStyle = '#7f4eff';
+    ctx.fillRect(o.x + 30, wy - 13, 26, 26);
+    ctx.fillStyle = '#f6b8ff';
+    ctx.fillRect(o.x + 36, wy - 7, 14, 14);
+    ctx.fillStyle = '#1f1533';
+    ctx.fillRect(o.x + 41, wy - 2, 4, 4);
   }
 }
 
@@ -278,7 +330,7 @@ function drawPlayer() {
   ctx.save();
   ctx.translate(state.player.x, state.player.y);
   ctx.rotate(state.player.flapTilt);
-  const bob = Math.sin(state.t * 0.24) * (state.phase === 'running' ? 0.8 : 2);
+  const bob = Math.sin(state.t * 0.24) * (state.phase === 'running' ? 1 : 2.2);
   drawPixelSprite(dragonSprite, -16, -16 + bob, 4, dragonPalette);
   ctx.fillStyle = '#fefefe';
   ctx.fillRect(4, -3 + bob, 3, 3);
@@ -287,40 +339,31 @@ function drawPlayer() {
 
 function drawGround() {
   const y = HEIGHT - GROUND;
-  ctx.fillStyle = '#2b2445';
+  ctx.fillStyle = '#2a2448';
   ctx.fillRect(0, y, WIDTH, GROUND);
-  ctx.fillStyle = '#453968';
-  for (let x = 0; x < WIDTH; x += 14) {
-    ctx.fillRect(x, y + ((x / 14) % 2) * 4, 10, 6);
+  ctx.fillStyle = '#453d70';
+  for (let x = 0; x < WIDTH; x += 16) {
+    ctx.fillRect(x, y + ((x / 16) % 2) * 4, 12, 7);
   }
-  ctx.fillStyle = '#67ffb8';
-  for (let x = 2; x < WIDTH; x += 18) {
-    const wave = Math.sin((state.t + x) * 0.06) * 2;
-    ctx.fillRect(x, y - 2 + wave, 2, 4);
+  ctx.fillStyle = '#65ffb4';
+  for (let x = 2; x < WIDTH; x += 20) {
+    const wave = Math.sin((state.t + x) * 0.07) * 2;
+    ctx.fillRect(x, y - 3 + wave, 2, 5);
   }
 }
 
-function drawUi() {
-  ctx.fillStyle = '#f7f2ff';
-  ctx.font = 'bold 28px monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText(`分数 ${state.score}`, 16, 40);
-
-  ctx.font = '16px monospace';
-  ctx.fillText(`最高 ${state.best}`, 16, 64);
-
-  if (state.phase === 'ready') {
-    drawBanner('点击或按空格开始');
-  } else if (state.phase === 'dead') {
-    drawBanner('坠入魔雾！按空格重来');
+function drawParticles() {
+  for (const p of state.particles) {
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, p.size, p.size);
   }
 }
 
 function drawBanner(text) {
-  const w = 340;
+  const w = 440;
   const h = 52;
   const x = (WIDTH - w) / 2;
-  const y = HEIGHT * 0.15;
+  const y = HEIGHT * 0.13;
   ctx.fillStyle = '#0d0a18cc';
   ctx.fillRect(x, y, w, h);
   ctx.strokeStyle = '#8b7bd3';
@@ -332,18 +375,21 @@ function drawBanner(text) {
   ctx.fillText(text, WIDTH / 2, y + 33);
 }
 
-function drawParticles() {
-  for (const p of state.particles) {
-    ctx.fillStyle = p.color;
-    ctx.fillRect(p.x, p.y, p.size, p.size);
-  }
+function drawUi() {
+  ctx.fillStyle = '#f7f2ff';
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 28px monospace';
+  ctx.fillText(`分数 ${state.score}`, 18, 38);
+  ctx.font = '16px monospace';
+  ctx.fillText(`最高 ${state.best}`, 18, 60);
+
+  if (state.phase === 'ready') drawBanner('横屏秘境开启：点击或按空格起飞');
+  if (state.phase === 'dead') drawBanner('撞上障碍！按空格再战一局');
 }
 
 function render() {
   drawBackground();
-  for (const gate of state.gates) {
-    drawGate(gate);
-  }
+  for (const o of state.obstacles) drawObstacle(o);
   drawGround();
   drawParticles();
   drawPlayer();
