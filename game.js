@@ -19,8 +19,8 @@ const state = {
     vy: 0,
     flapTilt: 0,
   },
-  encounters: [],
-  encounterTimer: 0,
+  hazards: [],
+  spawnTimer: 0,
 };
 
 function makeStars(amount) {
@@ -37,9 +37,9 @@ function resetGame() {
   state.phase = 'ready';
   state.score = 0;
   state.t = 0;
-  state.encounters = [];
+  state.hazards = [];
   state.particles = [];
-  state.encounterTimer = 0;
+  state.spawnTimer = 0;
   state.player.y = HEIGHT * 0.48;
   state.player.vy = 0;
   state.player.flapTilt = 0;
@@ -88,104 +88,76 @@ function crash() {
   }
 }
 
-function spawnEncounter() {
-  const variants = ['swing-orb', 'drift-shards', 'pulse-beam', 'narrow-gate'];
-  const variant = variants[Math.floor(Math.random() * variants.length)];
-
-  const baseGap = {
-    'swing-orb': 190,
-    'drift-shards': 196,
-    'pulse-beam': 205,
-    'narrow-gate': 178,
-  }[variant];
-
-  const topMin = 45;
-  const topMax = HEIGHT - GROUND - baseGap - 45;
-  const topHeight = topMin + Math.random() * (topMax - topMin);
-
-  state.encounters.push({
-    variant,
-    x: WIDTH + 50,
-    width: 94,
-    topHeight,
-    bottomY: topHeight + baseGap,
+function addHazard(kind, xOffset, extra = {}) {
+  const base = {
+    kind,
+    x: WIDTH + xOffset,
+    width: 56,
     passed: false,
-    seed: Math.random() * 1000,
     phase: Math.random() * Math.PI * 2,
-  });
+  };
+  state.hazards.push({ ...base, ...extra });
+}
+
+function spawnWave() {
+  const patterns = [
+    () => {
+      addHazard('top-spire', 40, { height: 150 + Math.random() * 90 });
+      addHazard('bottom-spire', 220, { height: 130 + Math.random() * 90 });
+    },
+    () => {
+      addHazard('bottom-spire', 40, { height: 160 + Math.random() * 70 });
+      addHazard('floating-rune', 230, { yBase: 145 + Math.random() * 180, amp: 40, width: 34, height: 34 });
+    },
+    () => {
+      addHazard('top-spire', 40, { height: 130 + Math.random() * 80 });
+      addHazard('floating-rune', 180, { yBase: 185 + Math.random() * 150, amp: 52, width: 34, height: 34 });
+      addHazard('bottom-spire', 340, { height: 120 + Math.random() * 80 });
+    },
+    () => {
+      addHazard('pulse-wall', 60, { yBase: 170 + Math.random() * 140, width: 110, thickness: 14, onThreshold: 0.4 });
+      addHazard('top-spire', 280, { height: 140 + Math.random() * 80 });
+    },
+    () => {
+      addHazard('bottom-spire', 40, { height: 130 + Math.random() * 70 });
+      addHazard('pulse-wall', 240, { yBase: 170 + Math.random() * 140, width: 108, thickness: 12, onThreshold: 0.25 });
+    },
+  ];
+
+  patterns[Math.floor(Math.random() * patterns.length)]();
 }
 
 function collidesRect(a, b) {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
 
-function getDynamicHazards(e) {
-  const hazards = [];
-
-  if (e.variant === 'swing-orb') {
-    const centerY = (e.topHeight + e.bottomY) / 2;
-    const swing = Math.sin(state.t * 0.08 + e.phase) * 56;
-    hazards.push({
-      left: e.x + 36,
-      right: e.x + 62,
-      top: centerY + swing - 13,
-      bottom: centerY + swing + 13,
-      type: 'orb',
-    });
+function getHazardRect(h) {
+  if (h.kind === 'top-spire') {
+    return { left: h.x, right: h.x + h.width, top: 0, bottom: h.height };
   }
-
-  if (e.variant === 'drift-shards') {
-    const drift = Math.sin(state.t * 0.06 + e.phase) * 36;
-    hazards.push({
-      left: e.x + 20,
-      right: e.x + 46,
-      top: e.topHeight - 34 + drift,
-      bottom: e.topHeight + drift,
-      type: 'shard',
-    });
-    hazards.push({
-      left: e.x + 48,
-      right: e.x + 74,
-      top: e.bottomY - drift,
-      bottom: e.bottomY + 34 - drift,
-      type: 'shard',
-    });
+  if (h.kind === 'bottom-spire') {
+    return {
+      left: h.x,
+      right: h.x + h.width,
+      top: HEIGHT - GROUND - h.height,
+      bottom: HEIGHT - GROUND,
+    };
   }
-
-  if (e.variant === 'pulse-beam') {
-    const pulse = Math.sin(state.t * 0.11 + e.phase);
-    if (pulse > 0.35) {
-      const by = (e.topHeight + e.bottomY) / 2;
-      hazards.push({
-        left: e.x + 6,
-        right: e.x + e.width - 6,
-        top: by - 8,
-        bottom: by + 8,
-        type: 'beam',
-      });
-    }
+  if (h.kind === 'floating-rune') {
+    const y = h.yBase + Math.sin(state.t * 0.08 + h.phase) * h.amp;
+    return { left: h.x, right: h.x + h.width, top: y, bottom: y + h.height };
   }
-
-  if (e.variant === 'narrow-gate') {
-    const pinch = (Math.sin(state.t * 0.09 + e.phase) + 1) * 0.5;
-    const inset = 12 + pinch * 12;
-    hazards.push({
-      left: e.x + inset,
-      right: e.x + inset + 10,
-      top: e.topHeight - 24,
-      bottom: e.topHeight + 18,
-      type: 'fang',
-    });
-    hazards.push({
-      left: e.x + e.width - inset - 10,
-      right: e.x + e.width - inset,
-      top: e.bottomY - 18,
-      bottom: e.bottomY + 24,
-      type: 'fang',
-    });
+  if (h.kind === 'pulse-wall') {
+    const on = Math.sin(state.t * 0.11 + h.phase) > h.onThreshold;
+    if (!on) return null;
+    return {
+      left: h.x,
+      right: h.x + h.width,
+      top: h.yBase - h.thickness * 0.5,
+      bottom: h.yBase + h.thickness * 0.5,
+    };
   }
-
-  return hazards;
+  return null;
 }
 
 function update() {
@@ -215,10 +187,10 @@ function update() {
   state.player.y += state.player.vy;
   state.player.flapTilt = Math.min(state.player.flapTilt + 0.05, 0.64);
 
-  state.encounterTimer += 1;
-  if (state.encounterTimer >= 150) {
-    state.encounterTimer = 0;
-    spawnEncounter();
+  state.spawnTimer += 1;
+  if (state.spawnTimer >= 170) {
+    state.spawnTimer = 0;
+    spawnWave();
   }
 
   const pRect = {
@@ -228,33 +200,24 @@ function update() {
     bottom: state.player.y + PLAYER_SIZE,
   };
 
-  for (let i = state.encounters.length - 1; i >= 0; i -= 1) {
-    const e = state.encounters[i];
-    e.x -= 2.25;
+  for (let i = state.hazards.length - 1; i >= 0; i -= 1) {
+    const h = state.hazards[i];
+    h.x -= 2.2;
 
-    if (!e.passed && e.x + e.width < state.player.x) {
-      e.passed = true;
+    if (!h.passed && h.x + h.width < state.player.x) {
+      h.passed = true;
       state.score += 1;
-      emitParticles(state.player.x + 6, state.player.y - 2, 11, '#ffe58a');
+      emitParticles(state.player.x + 8, state.player.y - 2, 8, '#ffe58a');
     }
 
-    if (e.x + e.width < -30) {
-      state.encounters.splice(i, 1);
+    if (h.x + h.width < -40) {
+      state.hazards.splice(i, 1);
       continue;
     }
 
-    const inX = pRect.right > e.x && pRect.left < e.x + e.width;
-    if (inX && (pRect.top < e.topHeight || pRect.bottom > e.bottomY)) {
+    const rect = getHazardRect(h);
+    if (rect && collidesRect(pRect, rect)) {
       crash();
-    }
-
-    if (inX) {
-      for (const hazard of getDynamicHazards(e)) {
-        if (collidesRect(pRect, hazard)) {
-          crash();
-          break;
-        }
-      }
     }
   }
 
@@ -314,79 +277,53 @@ function drawBackground() {
   drawMoon(WIDTH - 110, 78);
 }
 
-function drawArcaneColumn(x, y, w, h, seed, variant) {
-  const colorMap = {
-    'swing-orb': ['#33456f', '#7db3ff', '#8ffff2'],
-    'drift-shards': ['#2f5f72', '#67f7ff', '#d9ff72'],
-    'pulse-beam': ['#5f3478', '#c685ff', '#ffa5ff'],
-    'narrow-gate': ['#544d76', '#b0a2d8', '#f5f0ff'],
-  };
-  const [shadow, body, rune] = colorMap[variant];
-
-  ctx.fillStyle = shadow;
-  ctx.fillRect(x, y, w, h);
-  ctx.fillStyle = body;
-  for (let i = 0; i < h; i += 13) {
-    const offset = Math.sin(seed + i * 0.1) > 0 ? 5 : 2;
-    ctx.fillRect(x + offset, y + i, w - 10, 6);
-  }
-
-  ctx.fillStyle = rune;
-  for (let i = 12; i < h - 12; i += 26) {
-    const rx = x + 8 + ((Math.sin(seed * 9 + i) + 1) * 0.5) * (w - 16);
-    ctx.fillRect(Math.round(rx), y + i, 4, 4);
-  }
-}
-
 function drawHazard(h) {
-  if (h.type === 'orb') {
-    ctx.fillStyle = '#6a43ff';
-    ctx.fillRect(h.left, h.top, h.right - h.left, h.bottom - h.top);
-    ctx.fillStyle = '#e7b3ff';
-    ctx.fillRect(h.left + 6, h.top + 6, 8, 8);
+  if (h.kind === 'top-spire') {
+    ctx.fillStyle = '#345f86';
+    ctx.fillRect(h.x, 0, h.width, h.height);
+    ctx.fillStyle = '#8bd1ff';
+    for (let y = 0; y < h.height; y += 14) {
+      ctx.fillRect(h.x + 6, y, h.width - 12, 6);
+    }
+    ctx.fillStyle = '#d8f4ff';
+    ctx.fillRect(h.x - 4, h.height - 8, h.width + 8, 8);
     return;
   }
 
-  if (h.type === 'shard') {
-    ctx.fillStyle = '#c8ffff';
-    ctx.fillRect(h.left, h.top, h.right - h.left, h.bottom - h.top);
-    ctx.fillStyle = '#5ad5ef';
-    ctx.fillRect(h.left + 5, h.top + 5, 8, h.bottom - h.top - 10);
+  if (h.kind === 'bottom-spire') {
+    const y0 = HEIGHT - GROUND - h.height;
+    ctx.fillStyle = '#3d577e';
+    ctx.fillRect(h.x, y0, h.width, h.height);
+    ctx.fillStyle = '#aec9ff';
+    for (let y = y0; y < HEIGHT - GROUND; y += 14) {
+      ctx.fillRect(h.x + 5, y + 4, h.width - 10, 6);
+    }
+    ctx.fillStyle = '#eef5ff';
+    ctx.fillRect(h.x - 4, y0, h.width + 8, 8);
     return;
   }
 
-  if (h.type === 'beam') {
-    ctx.fillStyle = '#ff8df9';
-    ctx.fillRect(h.left, h.top, h.right - h.left, h.bottom - h.top);
-    ctx.fillStyle = '#ffe7ff';
-    ctx.fillRect(h.left + 10, h.top + 3, h.right - h.left - 20, h.bottom - h.top - 6);
+  if (h.kind === 'floating-rune') {
+    const y = h.yBase + Math.sin(state.t * 0.08 + h.phase) * h.amp;
+    ctx.fillStyle = '#6d42ff';
+    ctx.fillRect(h.x, y, h.width, h.height);
+    ctx.fillStyle = '#f2beff';
+    ctx.fillRect(h.x + 7, y + 7, h.width - 14, h.height - 14);
+    ctx.fillStyle = '#25193c';
+    ctx.fillRect(h.x + 14, y + 14, h.width - 28, h.height - 28);
     return;
   }
 
-  if (h.type === 'fang') {
-    ctx.fillStyle = '#f4f0ff';
-    ctx.fillRect(h.left, h.top, h.right - h.left, h.bottom - h.top);
-  }
-}
-
-function drawEncounter(e) {
-  drawArcaneColumn(e.x, 0, e.width, e.topHeight, e.seed, e.variant);
-  drawArcaneColumn(e.x, e.bottomY, e.width, HEIGHT - GROUND - e.bottomY, e.seed + 2.1, e.variant);
-
-  ctx.fillStyle = '#d6f6ff';
-  ctx.fillRect(e.x - 5, e.topHeight - 7, e.width + 10, 7);
-  ctx.fillRect(e.x - 5, e.bottomY, e.width + 10, 7);
-
-  for (const hazard of getDynamicHazards(e)) {
-    drawHazard(hazard);
-  }
-
-  if (e.variant === 'pulse-beam') {
-    const pulse = Math.sin(state.t * 0.11 + e.phase);
-    const by = (e.topHeight + e.bottomY) / 2;
-    if (pulse <= 0.35) {
-      ctx.fillStyle = '#9a78c8';
-      ctx.fillRect(e.x + 8, by - 2, e.width - 16, 4);
+  if (h.kind === 'pulse-wall') {
+    const active = Math.sin(state.t * 0.11 + h.phase) > h.onThreshold;
+    if (active) {
+      ctx.fillStyle = '#ff8df9';
+      ctx.fillRect(h.x, h.yBase - h.thickness * 0.5, h.width, h.thickness);
+      ctx.fillStyle = '#ffe7ff';
+      ctx.fillRect(h.x + 10, h.yBase - h.thickness * 0.5 + 3, h.width - 20, h.thickness - 6);
+    } else {
+      ctx.fillStyle = '#9677b7';
+      ctx.fillRect(h.x + 6, h.yBase - 2, h.width - 12, 4);
     }
   }
 }
@@ -465,13 +402,13 @@ function drawUi() {
   ctx.font = '16px monospace';
   ctx.fillText(`最高 ${state.best}`, 18, 60);
 
-  if (state.phase === 'ready') drawBanner('节奏放缓：障碍更少，但机制更多样');
-  if (state.phase === 'dead') drawBanner('撞上机制陷阱！按空格再战一局');
+  if (state.phase === 'ready') drawBanner('横向展开波次：单侧障碍为主，更可读');
+  if (state.phase === 'dead') drawBanner('命中障碍！按空格再战一局');
 }
 
 function render() {
   drawBackground();
-  for (const e of state.encounters) drawEncounter(e);
+  for (const h of state.hazards) drawHazard(h);
   drawGround();
   drawParticles();
   drawPlayer();
