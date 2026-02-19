@@ -19,8 +19,8 @@ const state = {
     vy: 0,
     flapTilt: 0,
   },
-  obstacles: [],
-  obstacleTimer: 0,
+  encounters: [],
+  encounterTimer: 0,
 };
 
 function makeStars(amount) {
@@ -37,9 +37,9 @@ function resetGame() {
   state.phase = 'ready';
   state.score = 0;
   state.t = 0;
-  state.obstacles = [];
+  state.encounters = [];
   state.particles = [];
-  state.obstacleTimer = 0;
+  state.encounterTimer = 0;
   state.player.y = HEIGHT * 0.48;
   state.player.vy = 0;
   state.player.flapTilt = 0;
@@ -88,28 +88,104 @@ function crash() {
   }
 }
 
-function spawnObstacle() {
-  const variants = ['crystal-gate', 'tooth-gate', 'rune-wheel'];
+function spawnEncounter() {
+  const variants = ['swing-orb', 'drift-shards', 'pulse-beam', 'narrow-gate'];
   const variant = variants[Math.floor(Math.random() * variants.length)];
-  const gap = variant === 'rune-wheel' ? 166 : 182;
-  const topMin = 42;
-  const topMax = HEIGHT - GROUND - gap - 42;
+
+  const baseGap = {
+    'swing-orb': 190,
+    'drift-shards': 196,
+    'pulse-beam': 205,
+    'narrow-gate': 178,
+  }[variant];
+
+  const topMin = 45;
+  const topMax = HEIGHT - GROUND - baseGap - 45;
   const topHeight = topMin + Math.random() * (topMax - topMin);
 
-  state.obstacles.push({
+  state.encounters.push({
     variant,
-    x: WIDTH + 40,
-    width: 82,
+    x: WIDTH + 50,
+    width: 94,
     topHeight,
-    bottomY: topHeight + gap,
+    bottomY: topHeight + baseGap,
     passed: false,
     seed: Math.random() * 1000,
-    bobPhase: Math.random() * Math.PI * 2,
+    phase: Math.random() * Math.PI * 2,
   });
 }
 
 function collidesRect(a, b) {
   return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function getDynamicHazards(e) {
+  const hazards = [];
+
+  if (e.variant === 'swing-orb') {
+    const centerY = (e.topHeight + e.bottomY) / 2;
+    const swing = Math.sin(state.t * 0.08 + e.phase) * 56;
+    hazards.push({
+      left: e.x + 36,
+      right: e.x + 62,
+      top: centerY + swing - 13,
+      bottom: centerY + swing + 13,
+      type: 'orb',
+    });
+  }
+
+  if (e.variant === 'drift-shards') {
+    const drift = Math.sin(state.t * 0.06 + e.phase) * 36;
+    hazards.push({
+      left: e.x + 20,
+      right: e.x + 46,
+      top: e.topHeight - 34 + drift,
+      bottom: e.topHeight + drift,
+      type: 'shard',
+    });
+    hazards.push({
+      left: e.x + 48,
+      right: e.x + 74,
+      top: e.bottomY - drift,
+      bottom: e.bottomY + 34 - drift,
+      type: 'shard',
+    });
+  }
+
+  if (e.variant === 'pulse-beam') {
+    const pulse = Math.sin(state.t * 0.11 + e.phase);
+    if (pulse > 0.35) {
+      const by = (e.topHeight + e.bottomY) / 2;
+      hazards.push({
+        left: e.x + 6,
+        right: e.x + e.width - 6,
+        top: by - 8,
+        bottom: by + 8,
+        type: 'beam',
+      });
+    }
+  }
+
+  if (e.variant === 'narrow-gate') {
+    const pinch = (Math.sin(state.t * 0.09 + e.phase) + 1) * 0.5;
+    const inset = 12 + pinch * 12;
+    hazards.push({
+      left: e.x + inset,
+      right: e.x + inset + 10,
+      top: e.topHeight - 24,
+      bottom: e.topHeight + 18,
+      type: 'fang',
+    });
+    hazards.push({
+      left: e.x + e.width - inset - 10,
+      right: e.x + e.width - inset,
+      top: e.bottomY - 18,
+      bottom: e.bottomY + 24,
+      type: 'fang',
+    });
+  }
+
+  return hazards;
 }
 
 function update() {
@@ -139,10 +215,10 @@ function update() {
   state.player.y += state.player.vy;
   state.player.flapTilt = Math.min(state.player.flapTilt + 0.05, 0.64);
 
-  state.obstacleTimer += 1;
-  if (state.obstacleTimer >= 94) {
-    state.obstacleTimer = 0;
-    spawnObstacle();
+  state.encounterTimer += 1;
+  if (state.encounterTimer >= 150) {
+    state.encounterTimer = 0;
+    spawnEncounter();
   }
 
   const pRect = {
@@ -152,51 +228,33 @@ function update() {
     bottom: state.player.y + PLAYER_SIZE,
   };
 
-  for (let i = state.obstacles.length - 1; i >= 0; i -= 1) {
-    const o = state.obstacles[i];
-    o.x -= 3;
+  for (let i = state.encounters.length - 1; i >= 0; i -= 1) {
+    const e = state.encounters[i];
+    e.x -= 2.25;
 
-    if (!o.passed && o.x + o.width < state.player.x) {
-      o.passed = true;
+    if (!e.passed && e.x + e.width < state.player.x) {
+      e.passed = true;
       state.score += 1;
       emitParticles(state.player.x + 6, state.player.y - 2, 11, '#ffe58a');
     }
 
-    if (o.x + o.width < -30) {
-      state.obstacles.splice(i, 1);
+    if (e.x + e.width < -30) {
+      state.encounters.splice(i, 1);
       continue;
     }
 
-    const inX = pRect.right > o.x && pRect.left < o.x + o.width;
-    if (inX && (pRect.top < o.topHeight || pRect.bottom > o.bottomY)) {
+    const inX = pRect.right > e.x && pRect.left < e.x + e.width;
+    if (inX && (pRect.top < e.topHeight || pRect.bottom > e.bottomY)) {
       crash();
     }
 
-    if (o.variant === 'tooth-gate' && inX) {
-      const toothTop = {
-        left: o.x + 20,
-        right: o.x + o.width - 20,
-        top: o.topHeight - 20,
-        bottom: o.topHeight,
-      };
-      const toothBottom = {
-        left: o.x + 20,
-        right: o.x + o.width - 20,
-        top: o.bottomY,
-        bottom: o.bottomY + 20,
-      };
-      if (collidesRect(pRect, toothTop) || collidesRect(pRect, toothBottom)) crash();
-    }
-
-    if (o.variant === 'rune-wheel') {
-      const wheelY = (o.topHeight + o.bottomY) / 2 + Math.sin(state.t * 0.08 + o.bobPhase) * 42;
-      const wheel = {
-        left: o.x + 30,
-        right: o.x + 56,
-        top: wheelY - 13,
-        bottom: wheelY + 13,
-      };
-      if (collidesRect(pRect, wheel)) crash();
+    if (inX) {
+      for (const hazard of getDynamicHazards(e)) {
+        if (collidesRect(pRect, hazard)) {
+          crash();
+          break;
+        }
+      }
     }
   }
 
@@ -212,23 +270,6 @@ function drawPixelSprite(sprite, x, y, scale, palette) {
       ctx.fillRect(x + col * scale, y + row * scale, scale, scale);
     }
   }
-}
-
-function drawBackground() {
-  const grad = ctx.createLinearGradient(0, 0, 0, HEIGHT);
-  grad.addColorStop(0, '#171430');
-  grad.addColorStop(0.5, '#221e43');
-  grad.addColorStop(1, '#1d1a32');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, WIDTH, HEIGHT);
-
-  for (const star of state.stars) {
-    const pulse = 0.56 + Math.sin(star.twinkle) * 0.32;
-    ctx.fillStyle = `rgba(186, 225, 255, ${pulse})`;
-    ctx.fillRect(Math.round(star.x), Math.round(star.y), star.size, star.size);
-  }
-
-  drawMoon(WIDTH - 110, 78);
 }
 
 function drawMoon(x, y) {
@@ -256,10 +297,31 @@ function drawMoon(x, y) {
   );
 }
 
+function drawBackground() {
+  const grad = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+  grad.addColorStop(0, '#171430');
+  grad.addColorStop(0.5, '#221e43');
+  grad.addColorStop(1, '#1d1a32');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  for (const star of state.stars) {
+    const pulse = 0.56 + Math.sin(star.twinkle) * 0.32;
+    ctx.fillStyle = `rgba(186, 225, 255, ${pulse})`;
+    ctx.fillRect(Math.round(star.x), Math.round(star.y), star.size, star.size);
+  }
+
+  drawMoon(WIDTH - 110, 78);
+}
+
 function drawArcaneColumn(x, y, w, h, seed, variant) {
-  const shadow = variant === 'tooth-gate' ? '#4f5b78' : '#2b6072';
-  const body = variant === 'tooth-gate' ? '#8da2cb' : '#69f7ff';
-  const rune = variant === 'rune-wheel' ? '#ffa4fe' : '#dbff6d';
+  const colorMap = {
+    'swing-orb': ['#33456f', '#7db3ff', '#8ffff2'],
+    'drift-shards': ['#2f5f72', '#67f7ff', '#d9ff72'],
+    'pulse-beam': ['#5f3478', '#c685ff', '#ffa5ff'],
+    'narrow-gate': ['#544d76', '#b0a2d8', '#f5f0ff'],
+  };
+  const [shadow, body, rune] = colorMap[variant];
 
   ctx.fillStyle = shadow;
   ctx.fillRect(x, y, w, h);
@@ -276,36 +338,56 @@ function drawArcaneColumn(x, y, w, h, seed, variant) {
   }
 }
 
-function drawObstacle(o) {
-  drawArcaneColumn(o.x, 0, o.width, o.topHeight, o.seed, o.variant);
-  drawArcaneColumn(o.x, o.bottomY, o.width, HEIGHT - GROUND - o.bottomY, o.seed + 2.1, o.variant);
-
-  if (o.variant === 'crystal-gate') {
-    ctx.fillStyle = '#d5ffff';
-    ctx.fillRect(o.x - 6, o.topHeight - 8, o.width + 12, 8);
-    ctx.fillRect(o.x - 6, o.bottomY, o.width + 12, 8);
+function drawHazard(h) {
+  if (h.type === 'orb') {
+    ctx.fillStyle = '#6a43ff';
+    ctx.fillRect(h.left, h.top, h.right - h.left, h.bottom - h.top);
+    ctx.fillStyle = '#e7b3ff';
+    ctx.fillRect(h.left + 6, h.top + 6, 8, 8);
+    return;
   }
 
-  if (o.variant === 'tooth-gate') {
-    ctx.fillStyle = '#e9f4ff';
-    for (let x = o.x + 20; x < o.x + o.width - 20; x += 10) {
-      ctx.fillRect(x, o.topHeight - 20, 6, 20);
-      ctx.fillRect(x, o.bottomY, 6, 20);
+  if (h.type === 'shard') {
+    ctx.fillStyle = '#c8ffff';
+    ctx.fillRect(h.left, h.top, h.right - h.left, h.bottom - h.top);
+    ctx.fillStyle = '#5ad5ef';
+    ctx.fillRect(h.left + 5, h.top + 5, 8, h.bottom - h.top - 10);
+    return;
+  }
+
+  if (h.type === 'beam') {
+    ctx.fillStyle = '#ff8df9';
+    ctx.fillRect(h.left, h.top, h.right - h.left, h.bottom - h.top);
+    ctx.fillStyle = '#ffe7ff';
+    ctx.fillRect(h.left + 10, h.top + 3, h.right - h.left - 20, h.bottom - h.top - 6);
+    return;
+  }
+
+  if (h.type === 'fang') {
+    ctx.fillStyle = '#f4f0ff';
+    ctx.fillRect(h.left, h.top, h.right - h.left, h.bottom - h.top);
+  }
+}
+
+function drawEncounter(e) {
+  drawArcaneColumn(e.x, 0, e.width, e.topHeight, e.seed, e.variant);
+  drawArcaneColumn(e.x, e.bottomY, e.width, HEIGHT - GROUND - e.bottomY, e.seed + 2.1, e.variant);
+
+  ctx.fillStyle = '#d6f6ff';
+  ctx.fillRect(e.x - 5, e.topHeight - 7, e.width + 10, 7);
+  ctx.fillRect(e.x - 5, e.bottomY, e.width + 10, 7);
+
+  for (const hazard of getDynamicHazards(e)) {
+    drawHazard(hazard);
+  }
+
+  if (e.variant === 'pulse-beam') {
+    const pulse = Math.sin(state.t * 0.11 + e.phase);
+    const by = (e.topHeight + e.bottomY) / 2;
+    if (pulse <= 0.35) {
+      ctx.fillStyle = '#9a78c8';
+      ctx.fillRect(e.x + 8, by - 2, e.width - 16, 4);
     }
-  }
-
-  if (o.variant === 'rune-wheel') {
-    ctx.fillStyle = '#bddeff';
-    ctx.fillRect(o.x - 5, o.topHeight - 8, o.width + 10, 8);
-    ctx.fillRect(o.x - 5, o.bottomY, o.width + 10, 8);
-
-    const wy = (o.topHeight + o.bottomY) / 2 + Math.sin(state.t * 0.08 + o.bobPhase) * 42;
-    ctx.fillStyle = '#7f4eff';
-    ctx.fillRect(o.x + 30, wy - 13, 26, 26);
-    ctx.fillStyle = '#f6b8ff';
-    ctx.fillRect(o.x + 36, wy - 7, 14, 14);
-    ctx.fillStyle = '#1f1533';
-    ctx.fillRect(o.x + 41, wy - 2, 4, 4);
   }
 }
 
@@ -360,7 +442,7 @@ function drawParticles() {
 }
 
 function drawBanner(text) {
-  const w = 440;
+  const w = 450;
   const h = 52;
   const x = (WIDTH - w) / 2;
   const y = HEIGHT * 0.13;
@@ -383,13 +465,13 @@ function drawUi() {
   ctx.font = '16px monospace';
   ctx.fillText(`最高 ${state.best}`, 18, 60);
 
-  if (state.phase === 'ready') drawBanner('横屏秘境开启：点击或按空格起飞');
-  if (state.phase === 'dead') drawBanner('撞上障碍！按空格再战一局');
+  if (state.phase === 'ready') drawBanner('节奏放缓：障碍更少，但机制更多样');
+  if (state.phase === 'dead') drawBanner('撞上机制陷阱！按空格再战一局');
 }
 
 function render() {
   drawBackground();
-  for (const o of state.obstacles) drawObstacle(o);
+  for (const e of state.encounters) drawEncounter(e);
   drawGround();
   drawParticles();
   drawPlayer();
