@@ -4,6 +4,8 @@ const ctx = canvas.getContext('2d');
 const WIDTH = canvas.width;
 const HEIGHT = canvas.height;
 const GROUND = 76;
+const MIN_GAP = 150;                     // 同一波次内障碍物水平净间隙（原为200）
+const SKY_HEIGHT = HEIGHT - GROUND;      // 可飞行区域高度
 
 const spriteSheet = new Image();
 let spriteReady = false;
@@ -27,20 +29,128 @@ spriteSheet.onerror = () => {
 
 assignSpriteSource(CHARACTER_SHEET_DATA_URL);
 
+// ─── 音效系统（Web Audio API 合成，无需外部文件）───────────────────────────
+let audioCtx = null;
+
+function getAudioCtx() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  // 某些浏览器需要用户交互后才能恢复
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+/**
+ * 起飞音效：低→高软扫频 + 轻柔混响感
+ * 像魔法棒轻挥的闪动音，温和不刺耳
+ */
+function playSoundFlap() {
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+
+    // 主扫频振荡器
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    const filter = ac.createBiquadFilter();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(320, now);
+    osc.frequency.exponentialRampToValueAtTime(780, now + 0.18);
+
+    filter.type = 'bandpass';
+    filter.frequency.value = 700;
+    filter.Q.value = 1.8;
+
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.18, now + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(ac.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.3);
+
+    // 叠一层高频闪光粒子感
+    const osc2 = ac.createOscillator();
+    const gain2 = ac.createGain();
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(1200, now);
+    osc2.frequency.exponentialRampToValueAtTime(2400, now + 0.12);
+    gain2.gain.setValueAtTime(0.06, now);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+    osc2.connect(gain2);
+    gain2.connect(ac.destination);
+    osc2.start(now);
+    osc2.stop(now + 0.18);
+  } catch (e) {
+    // 音效失败不影响游戏
+  }
+}
+
+/**
+ * 过障碍物音效：清脆双音程小铃声
+ * C5 → E5 快速叮鸣，像魔法通过门扉
+ */
+function playSoundScore() {
+  try {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+
+    const notes = [523.25, 659.25]; // C5, E5
+    notes.forEach((freq, i) => {
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      const t = now + i * 0.075;
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t);
+
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.14, t + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+
+      // 轻微泛音叠加，增加铃声质感
+      const osc2 = ac.createOscillator();
+      const gain2 = ac.createGain();
+      osc2.type = 'triangle';
+      osc2.frequency.setValueAtTime(freq * 2.76, t);
+      gain2.gain.setValueAtTime(0.03, t);
+      gain2.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+      osc2.connect(gain2);
+      gain2.connect(ac.destination);
+      osc2.start(t);
+      osc2.stop(t + 0.2);
+
+      osc.connect(gain);
+      gain.connect(ac.destination);
+      osc.start(t);
+      osc.stop(t + 0.42);
+    });
+  } catch (e) {
+    // 音效失败不影响游戏
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 const CHARACTERS = {
   violet: {
     id: 'violet',
-    name: '紫苑魔女（困难）',
-    flap: -5.5,
-    gravity: 0.34,
-    hitbox: 15,
+    name: '十六夜理子',
+    flap: -6.4,
+    gravity: 0.27,
+    hitbox: 12,
     frame: { sx: 0, sy: 0, sw: 192, sh: 192 },
   },
   gold: {
     id: 'gold',
-    name: '金辉魔女（简单）',
-    flap: -6.4,
-    gravity: 0.27,
+    name: '朝日奈未来',
+    flap: -5.5,
+    gravity: 0.34,
     hitbox: 12,
     frame: { sx: 192, sy: 0, sw: 192, sh: 192 },
   },
@@ -165,6 +275,7 @@ function flap() {
   state.player.vy = character.flap;
   state.player.flapTilt = -0.45;
   emitParticles(state.player.x - 10, state.player.y + 1, 8, '#8ff8ff');
+  playSoundFlap();
 }
 
 function emitParticles(x, y, count, color) {
@@ -202,24 +313,138 @@ function addHazard(kind, xOffset, extra = {}) {
   });
 }
 
+// 生成波次函数，确保同一波次内障碍物横向净间隙≥MIN_GAP，且不同波次间也有足够间隙
 function spawnWave() {
+  const WAVE_GAP = 150; // 波次间最小水平间距（与MIN_GAP保持一致）
+
+  // 计算当前最右侧障碍物的右边缘
+  let maxRight = -Infinity;
+  for (const h of state.hazards) {
+    maxRight = Math.max(maxRight, h.x + h.width);
+  }
+
+  let baseX;
+  if (state.hazards.length === 0 || maxRight < 0) {
+    // 没有障碍物或所有障碍物都已移出左侧，使用原随机范围
+    baseX = 30 + Math.random() * 50;
+  } else {
+    const requiredLeft = maxRight + WAVE_GAP;          // 新波次第一个障碍物左边缘所需位置
+    const requiredBaseX = requiredLeft - WIDTH;        // 对应的偏移量
+    if (requiredBaseX <= 30) {
+      baseX = 30 + Math.random() * 50;
+    } else {
+      // 需要更大的偏移量，额外增加随机性避免过于规律
+      baseX = requiredBaseX + Math.random() * 50;
+    }
+  }
+
+  const maxHeightLimit = SKY_HEIGHT * 0.65; // 单个尖塔最大高度限制
+
   const patterns = [
+    // 0: 上下尖塔（增加最小高度限制30）
     () => {
-      addHazard('top-spire', 40, { height: 150 + Math.random() * 90 });
-      addHazard('bottom-spire', 220, { height: 130 + Math.random() * 90 });
+      const gap = MIN_GAP + Math.random() * 40;
+      const minHeight = 30;                          // 最小尖塔高度
+      const maxTop = SKY_HEIGHT - gap - minHeight;   // 顶部尖塔最大高度，保证底部尖塔≥minHeight
+      let topHeight, bottomHeight;
+      do {
+        topHeight = minHeight + Math.random() * (maxTop - minHeight);
+        bottomHeight = SKY_HEIGHT - topHeight - gap;
+      } while (topHeight > maxHeightLimit || bottomHeight > maxHeightLimit);
+
+      const width = 56; // 尖塔宽度
+      let x1 = baseX;
+      addHazard('top-spire', x1, { height: topHeight });
+
+      let right1 = x1 + width;
+      let x2 = right1 + MIN_GAP; // 使用MIN_GAP代替硬编码200
+      addHazard('bottom-spire', x2, { height: bottomHeight });
     },
+
+    // 1: 底部尖塔 + 漂浮符文
     () => {
-      addHazard('bottom-spire', 40, { height: 160 + Math.random() * 70 });
-      addHazard('floating-rune', 230, { yBase: 145 + Math.random() * 180, amp: 40, width: 34, height: 34 });
+      const amp = 40;
+      const RUNE_HEIGHT = 34;                // 符文自身高度
+      const SAFE_DIST = 30;                   // 与尖塔/地面的安全距离
+
+      let bottomHeight;
+      do {
+        bottomHeight = 50 + Math.random() * (SKY_HEIGHT - 2 * amp - 50);
+      } while (bottomHeight > maxHeightLimit);
+
+      const spireWidth = 56;
+      const runeWidth = 34;
+
+      let x1 = baseX;
+      addHazard('bottom-spire', x1, { height: bottomHeight });
+
+      let right1 = x1 + spireWidth;
+      let x2 = right1 + MIN_GAP; // 使用MIN_GAP
+      const spireTopY = SKY_HEIGHT - bottomHeight;   // 底部尖塔的顶部y坐标
+
+      // 符文中心y范围：顶部不高于尖塔顶部-安全距离-振幅，底部不低于地面+安全距离+振幅+符文高度
+      const minY = spireTopY + amp + SAFE_DIST;                     // 符文顶部 >= spireTopY + SAFE_DIST
+      const maxY = SKY_HEIGHT - amp - SAFE_DIST - RUNE_HEIGHT;      // 符文底部 <= SKY_HEIGHT - SAFE_DIST
+      const yBase = minY + Math.random() * Math.max(1, maxY - minY);
+      addHazard('floating-rune', x2, { yBase, amp, width: runeWidth, height: RUNE_HEIGHT });
     },
+
+    // 2: 顶部尖塔 + 漂浮符文 + 底部尖塔
     () => {
-      addHazard('top-spire', 40, { height: 130 + Math.random() * 80 });
-      addHazard('floating-rune', 180, { yBase: 185 + Math.random() * 150, amp: 52, width: 34, height: 34 });
-      addHazard('bottom-spire', 340, { height: 120 + Math.random() * 80 });
+      const amp = 52;
+      const RUNE_HEIGHT = 34;
+      const SAFE_DIST = 30;
+      const gap = MIN_GAP + Math.random() * 40;
+      let topHeight, bottomHeight;
+      do {
+        topHeight = 50 + Math.random() * (SKY_HEIGHT - gap - 50);
+        bottomHeight = SKY_HEIGHT - topHeight - gap;
+      } while (topHeight > maxHeightLimit || bottomHeight > maxHeightLimit);
+
+      const spireWidth = 56;
+      const runeWidth = 34;
+
+      let x1 = baseX;
+      addHazard('top-spire', x1, { height: topHeight });
+      let right1 = x1 + spireWidth;
+
+      let x2 = right1 + MIN_GAP; // 使用MIN_GAP
+      const topSpireBottom = topHeight;
+      const bottomSpireTop = SKY_HEIGHT - bottomHeight;
+
+      // 符文中心y范围：顶部不高于顶部尖塔底部+安全距离+振幅，底部不低于底部尖塔顶部-安全距离-振幅-符文高度
+      const minY = topSpireBottom + amp + SAFE_DIST;                     // 符文顶部 >= topSpireBottom + SAFE_DIST
+      const maxY = bottomSpireTop - amp - SAFE_DIST - RUNE_HEIGHT;       // 符文底部 <= bottomSpireTop - SAFE_DIST
+      const yBase = minY + Math.random() * Math.max(1, maxY - minY);
+      addHazard('floating-rune', x2, { yBase, amp, width: runeWidth, height: RUNE_HEIGHT });
+
+      let right2 = x2 + runeWidth;
+      let x3 = right2 + MIN_GAP; // 使用MIN_GAP
+      addHazard('bottom-spire', x3, { height: bottomHeight });
     },
+
+    // 3: 脉冲墙 + 顶部尖塔
     () => {
-      addHazard('pulse-wall', 60, { yBase: 170 + Math.random() * 140, width: 110, thickness: 14, onThreshold: 0.4 });
-      addHazard('top-spire', 280, { height: 140 + Math.random() * 80 });
+      const SAFE_DIST = 40;    // 脉冲墙与尖塔、地面的安全距离
+      let topHeight;
+      do {
+        topHeight = 50 + Math.random() * (SKY_HEIGHT - MIN_GAP - 50);
+      } while (topHeight > maxHeightLimit);
+
+      const wallWidth = 110;
+      const spireWidth = 56;
+
+      let x1 = baseX;
+      // 脉冲墙中心y范围：顶部不高于尖塔底部+安全距离+半厚，底部不低于地面-安全距离-半厚
+      const halfThick = 7;     // 厚度14的一半
+      const minY = topHeight + SAFE_DIST + halfThick;
+      const maxY = SKY_HEIGHT - SAFE_DIST - halfThick;
+      const yBase = minY + Math.random() * (maxY - minY);
+      addHazard('pulse-wall', x1, { yBase, width: wallWidth, thickness: 14, onThreshold: 0.4 });
+
+      let right1 = x1 + wallWidth;
+      let x2 = right1 + MIN_GAP; // 使用MIN_GAP
+      addHazard('top-spire', x2, { height: topHeight });
     },
   ];
   patterns[Math.floor(Math.random() * patterns.length)]();
@@ -289,6 +514,7 @@ function update() {
       h.passed = true;
       state.score += 1;
       emitParticles(state.player.x + 8, state.player.y - 2, 8, '#ffe58a');
+      playSoundScore();
     }
 
     if (h.x + h.width < -40) {
@@ -417,20 +643,20 @@ function drawCharacterFromSheet(character, x, y, targetW, targetH) {
 
 function drawCharacterPreview(character, x, y, selected, keyLabel, helpText) {
   ctx.fillStyle = selected ? '#2e274e' : '#18142c';
-  ctx.fillRect(x, y, 250, 170);
+  ctx.fillRect(x, y, 300, 170);
   ctx.strokeStyle = selected ? '#ffd86f' : '#7a6bbd';
   ctx.lineWidth = 3;
-  ctx.strokeRect(x + 1.5, y + 1.5, 247, 167);
+  ctx.strokeRect(x + 1.5, y + 1.5, 297, 167);
 
-  drawCharacterFromSheet(character, x + 10, y + 18, 100, 120);
+  drawCharacterFromSheet(character, x + 10, y + 18, 140, 120);
 
   ctx.fillStyle = '#f7f2ff';
   ctx.font = 'bold 16px monospace';
   ctx.textAlign = 'left';
-  ctx.fillText(character.name, x + 118, y + 52);
+  ctx.fillText(character.name, x + 168, y + 52);
   ctx.font = '14px monospace';
   ctx.fillText(helpText, x + 118, y + 80);
-  ctx.fillText(`按 ${keyLabel} 选择`, x + 118, y + 108);
+  ctx.fillText(`按 ${keyLabel} 选择`, x + 168, y + 108);
 }
 
 function drawSelectScreen() {
@@ -440,12 +666,12 @@ function drawSelectScreen() {
   ctx.fillStyle = '#f8f3ff';
   ctx.textAlign = 'center';
   ctx.font = 'bold 30px monospace';
-  ctx.fillText('选择角色', WIDTH / 2, 92);
+  ctx.fillText('请选择角色', WIDTH / 2, 92);
   ctx.font = '16px monospace';
-  ctx.fillText('角色图已内嵌到代码文本中（无二进制依赖）。', WIDTH / 2, 122);
+  ctx.fillText(' 不同角色手感不同哦 ', WIDTH / 2, 122);
 
-  drawCharacterPreview(CHARACTERS.violet, 120, 160, state.selectedCharacter === 'violet', '1', '重力更高 / 操作更硬核');
-  drawCharacterPreview(CHARACTERS.gold, 590, 160, state.selectedCharacter === 'gold', '2', '重力更低 / 起跳更轻松');
+  drawCharacterPreview(CHARACTERS.violet, 120, 160, state.selectedCharacter === 'violet', '1', '    一切都在我的计算之内');
+  drawCharacterPreview(CHARACTERS.gold, 590, 160, state.selectedCharacter === 'gold', '2', '       太让人激动啦！');
 }
 
 function drawPlayer() {
@@ -503,8 +729,8 @@ function drawUi() {
   ctx.fillText(`最高 ${state.best}`, 18, 60);
   if (state.selectedCharacter) ctx.fillText(`角色 ${getCharacter().name}`, 18, 82);
 
-  if (state.phase === 'ready') drawBanner('准备完毕：空格/点击起飞，按 Q 可重选角色');
-  if (state.phase === 'dead') drawBanner('命中障碍！空格重开，按 Q 返回选角');
+  if (state.phase === 'ready') drawBanner('准备完毕：空格/点击起飞，按 Q 返回选角');
+  if (state.phase === 'dead') drawBanner('遗憾，撞到障碍了！空格重开，按 Q 返回选角');
 }
 
 function render() {
@@ -541,6 +767,9 @@ window.addEventListener('keydown', (event) => {
 });
 
 canvas.addEventListener('pointerdown', (event) => {
+  // 防止触摸设备上的默认滚动/缩放行为
+  event.preventDefault();
+
   if (state.phase === 'select') {
     const rect = canvas.getBoundingClientRect();
     const x = ((event.clientX - rect.left) / rect.width) * WIDTH;

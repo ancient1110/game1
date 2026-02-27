@@ -49,6 +49,10 @@ canvas {
   border: 4px solid #000;
   image-rendering: pixelated;
   background: #181326;
+  /* 阻止浏览器拦截触摸/指针事件，确保触屏正常响应 */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
 .tips {
