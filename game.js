@@ -174,6 +174,13 @@ const state = {
   spawnTimer: 0,
 };
 
+const touchBackButton = {
+  x: WIDTH - 190,
+  y: 16,
+  w: 172,
+  h: 42,
+};
+
 
 const frameRectCache = new Map();
 
@@ -731,6 +738,16 @@ function drawUi() {
 
   if (state.phase === 'ready') drawBanner('准备完毕：空格/点击起飞，按 Q 返回选角');
   if (state.phase === 'dead') drawBanner('遗憾，撞到障碍了！空格重开，按 Q 返回选角');
+
+  ctx.fillStyle = '#0d0a18cc';
+  ctx.fillRect(touchBackButton.x, touchBackButton.y, touchBackButton.w, touchBackButton.h);
+  ctx.strokeStyle = '#8b7bd3';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(touchBackButton.x + 1, touchBackButton.y + 1, touchBackButton.w - 2, touchBackButton.h - 2);
+  ctx.fillStyle = '#e5dbff';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText('返回选角 (Q)', touchBackButton.x + touchBackButton.w / 2, touchBackButton.y + 27);
 }
 
 function render() {
@@ -777,6 +794,20 @@ canvas.addEventListener('pointerdown', (event) => {
 
     if (x >= 120 && x <= 370 && y >= 160 && y <= 330) return chooseCharacter('violet');
     if (x >= 590 && x <= 840 && y >= 160 && y <= 330) return chooseCharacter('gold');
+    return;
+  }
+
+  const rect = canvas.getBoundingClientRect();
+  const x = ((event.clientX - rect.left) / rect.width) * WIDTH;
+  const y = ((event.clientY - rect.top) / rect.height) * HEIGHT;
+  const hitBackButton =
+    x >= touchBackButton.x &&
+    x <= touchBackButton.x + touchBackButton.w &&
+    y >= touchBackButton.y &&
+    y <= touchBackButton.y + touchBackButton.h;
+
+  if (hitBackButton) {
+    resetGame(true);
     return;
   }
 
